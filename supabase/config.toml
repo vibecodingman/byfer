@@ -1,0 +1,5 @@
+[functions.create-app-handoff]
+verify_jwt = true
+
+[functions.redeem-app-handoff]
+verify_jwt = false
