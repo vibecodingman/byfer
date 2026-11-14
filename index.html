@@ -1,0 +1,230 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inomesto</title>
+<link rel="stylesheet" href="styles.css?v=20261112-member-layout-3">
+<script src="vendor/supabase.js"></script>
+</head>
+<body>
+
+<div id="diag" class="diag" hidden></div>
+
+<section id="screen-auth" class="screen">
+  <div class="auth-card">
+    <div class="brand-lg"><span class="mark">I</span><span>Inomesto</span></div>
+    <h1>Общение без лишнего</h1>
+    <p class="muted">Публикуйте посты, создавайте каналы и сообщества, общайтесь лично.</p>
+
+    <button class="btn provider" id="signInGitHub">
+      <svg viewBox="0 0 16 16" width="19" height="19" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      Войти через GitHub
+    </button>
+
+    <button class="btn provider" id="signInGoogle">
+      <svg viewBox="0 0 48 48" width="19" height="19" aria-hidden="true"><path fill="#4285F4" d="M45 24c0-1.6-.1-2.7-.4-4H24v7.5h12c-.2 2-1.5 5-4.4 7l6.7 5.2C42.2 36.2 45 30.7 45 24z"/><path fill="#34A853" d="M24 46c6.9 0 12.7-2.3 17-6.2l-6.7-5.2C31.9 36 28.2 37 24 37c-6.6 0-12.2-4.4-14.2-10.4l-7 5.4C7.2 40.7 15 46 24 46z"/><path fill="#FBBC05" d="M9.8 26.6c-.5-1.5-.8-3-.8-4.6s.3-3.1.8-4.6l-7-5.4C1 15.1 0 19.4 0 22s1 6.9 2.8 10z"/><path fill="#EA4335" d="M24 9c3.7 0 7 1.3 9.6 3.8l6-6C35.9 3 30.6 1 24 1 15 1 7.2 6.3 2.8 13l7 5.4C11.8 13.4 17.4 9 24 9z"/></svg>
+      Войти через Google
+    </button>
+
+    <div class="or"><span>или по почте</span></div>
+
+    <label class="field"><span>Электронная почта</span>
+      <input id="emailInput" type="email" autocomplete="email" placeholder="pochta@example.com"></label>
+    <button class="btn provider" id="signInEmail">Прислать ссылку для входа</button>
+
+    <p class="fine" id="authHint">Регистрация свободная, пароль не нужен. GitHub в России открывается без VPN.</p>
+  </div>
+</section>
+
+<section id="screen-onboarding" class="screen">
+  <div class="auth-card">
+    <h1>Заполните профиль</h1>
+    <p class="muted">Имя обязательно, остальное — по желанию.</p>
+    <label class="field"><span>Имя</span><input id="obName" maxlength="40" placeholder="Как вас зовут"></label>
+    <label class="field"><span>Имя пользователя (латиницей)</span><input id="obUser" maxlength="24" placeholder="username"></label>
+    <label class="field"><span>О себе</span><input id="obBio" maxlength="160" placeholder="Пара слов о себе"></label>
+    <button class="btn primary wide" id="saveOnboarding">Продолжить</button>
+  </div>
+</section>
+
+<section id="screen-app" class="screen">
+  <header class="topbar">
+    <div class="brand"><span class="mark small">I</span><span>Inomesto</span></div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="feed"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h11a2 2 0 0 1 2 2v13H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2Z"/><path d="M8 8h7M8 12h7M8 16h4M18 8h2a1 1 0 0 1 1 1v9a1.5 1.5 0 0 1-1.5 1.5"/></svg></span><span class="tab-label">Лента</span></button>
+      <button class="tab" data-tab="spaces"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 5.8M17 14a5 5 0 0 1 3.5 4.8"/></svg></span><span class="tab-label">Каналы и группы</span></button>
+      <button class="tab" data-tab="chats"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H7l-4 2v-6.5A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 10h8M8 13.5h5"/></svg></span><span class="tab-label">Чаты</span></button>
+      <button class="tab" data-tab="me"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></span><span class="tab-label">Профиль</span></button>
+      <button class="tab staff-only" data-tab="mod" hidden><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 6v5.5c0 4.5-3.1 7.8-8 9.5-4.9-1.7-8-5-8-9.5V6l8-3Z"/><path d="m8.5 12 2.3 2.3 4.8-5"/></svg></span><span class="tab-label">Модерация</span></button>
+    </nav>
+    <button class="btn ghost" id="signOut">Выйти</button>
+  </header>
+
+  <div class="banner" id="muteBanner" hidden></div>
+
+  <main class="wrap">
+    <div class="pane active" id="pane-feed">
+      <div class="page-heading">
+        <div><h1>Ваша лента</h1><p>Публикации только из каналов, на которые вы подписаны</p></div>
+        <button class="btn primary" id="feedFindChannels">Найти каналы</button>
+      </div>
+      <div id="feed"></div>
+    </div>
+
+    <div class="pane" id="pane-spaces">
+      <div class="page-heading">
+        <div><h1>Каналы и сообщества</h1><p>Подписывайтесь на каналы или вступайте в сообщества</p></div>
+        <button class="btn primary" id="openSpaceModal">Создать</button>
+      </div>
+      <div class="space-search-card">
+        <label class="space-search-label" for="spaceSearchInput">Поиск каналов и сообществ</label>
+        <div class="space-search-wrap"><span aria-hidden="true">⌕</span><input id="spaceSearchInput" type="search" placeholder="Название или ключевое слово…" autocomplete="off"></div>
+        <p class="sub">В списке ниже — ваши подписки. Через поиск можно найти новые каналы и сообщества.</p>
+      </div>
+      <div id="spaceView"></div>
+    </div>
+
+    <div class="pane" id="pane-chats">
+      <div class="page-heading">
+        <div><h1>Ваши чаты</h1><p>Личные разговоры и поддержка</p></div>
+      </div>
+      <div class="chat-layout card">
+        <div class="chat-list">
+          <div class="row gap mb">
+            <input id="newDmUser" class="grow" placeholder="@логин пользователя">
+            <button class="btn primary" id="startDm">Новый чат</button>
+          </div>
+          <div id="convList"></div>
+        </div>
+        <div class="chat-window">
+          <div class="chat-head" id="chatHead">Выберите чат</div>
+          <div class="messages" id="messages"><div class="empty">Слева выберите диалог</div></div>
+          <div id="chatStaged" class="chat-staged" hidden></div>
+          <div class="chat-input">
+            <input id="chatFileInput" type="file" multiple accept="image/*,audio/*,video/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" hidden>
+            <button class="btn ghost chat-attach" id="attachChatFile" type="button" title="Прикрепить файл">📎</button>
+            <button class="btn ghost chat-voice" id="recordVoice" type="button" title="Записать голосовое сообщение">🎙 Голосовое</button>
+            <input id="msgInput" placeholder="Сообщение…">
+            <button class="btn primary" id="sendMsg">Отправить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-me">
+      <div class="card profile-self"><div id="meAvatar"></div><div><h2 id="meName">—</h2><p class="muted" id="meMeta"></p><div id="meStatus"></div></div></div>
+      <div class="card">
+        <h3>Настройки</h3>
+        <label class="field"><span>Аватар профиля</span><input id="avatarInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small class="sub">PNG, JPG, WebP или GIF, до 5 МБ</small></label>
+        <label class="field"><span>Имя</span><input id="setName"></label>
+        <label class="field"><span>Имя пользователя</span><input id="setUser"></label>
+        <label class="field"><span>О себе</span><input id="setBio"></label>
+        <label class="field"><span>Кто может писать вам лично</span>
+          <select id="setDm">
+            <option value="everyone">Все пользователи</option>
+            <option value="contacts">Только те, с кем я в одном пространстве</option>
+            <option value="nobody">Никто</option>
+          </select>
+        </label>
+        <button class="btn primary" id="saveProfile">Сохранить</button>
+      </div>
+      <div class="card">
+        <h3>Уведомления</h3>
+        <p class="muted">Настройки сохраняются в аккаунте и действуют на всех ваших устройствах. Лайки не отправляют уведомлений.</p>
+        <label class="field check"><input type="checkbox" id="notifDmEnabled" checked> Новые сообщения в личных чатах</label>
+        <label class="field"><span>Как показывать сообщения</span>
+          <select id="notifDmDelivery">
+            <option value="in_app">Всплывающее уведомление в Inomesto</option>
+            <option value="browser">Уведомление браузера</option>
+            <option value="both">Оба способа</option>
+          </select>
+        </label>
+        <button class="btn ghost" id="enableBrowserNotifications" type="button">Разрешить уведомления браузера</button>
+        <div class="sub mt">Уведомления браузера работают, пока сайт открыт. Для них нужно разрешение браузера.</div>
+        <hr class="settings-divider">
+        <label class="field check"><input type="checkbox" id="notifSpaceBadges" checked> Счётчики новых публикаций в каналах и группах</label>
+        <label class="field check"><input type="checkbox" id="notifCommentBadges" checked> Счётчики новых комментариев</label>
+        <p class="sub">Публикации в каналах и группах, а также комментарии по умолчанию показываются только счётчиками — без всплывающих уведомлений.</p>
+        <button class="btn primary" id="saveNotificationPrefs">Сохранить настройки уведомлений</button>
+      </div>
+      <div class="card"><h3>Мои предупреждения</h3><div id="myWarns" class="muted">Загрузка…</div></div>
+      <div class="card">
+        <h3>Проверка подключения</h3>
+        <p class="muted">Нажмите, чтобы проверить базу, хранилище и вход. Красные пункты показывают, какой шаг настройки пропущен.</p>
+        <button class="btn ghost" id="runDiag">Проверить</button>
+        <div id="diagOut" class="muted mt"></div>
+      </div>
+      <div class="card">
+        <h3>Поддержка</h3>
+        <p class="muted">Обращение увидят владелец и совладельцы. Ответ придёт от имени чата поддержки.</p>
+        <button class="btn ghost" id="openSupport">Открыть чат поддержки</button>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-mod">
+      <div class="card"><h2>Панель модерации</h2><p class="muted">Доступ только владельцу и совладельцам.</p></div>
+      <div class="card"><h3>Жалобы</h3><div id="reportList"></div></div>
+      <div class="card"><h3>Отложенные удаления</h3><div id="deletionList"></div></div>
+      <div class="card"><h3>Верификация и роли</h3>
+        <label class="field"><span>Логин пользователя</span><input id="staffUser" placeholder="username"></label>
+        <div class="row gap wrap">
+          <button class="btn ghost" data-staff="verify">Выдать галочку</button>
+          <button class="btn ghost" data-staff="unverify">Отозвать галочку</button>
+          <button class="btn ghost" data-staff="coowner">Сделать совладельцем</button>
+          <button class="btn ghost" data-staff="uncoowner">Снять совладельца</button>
+          <button class="btn ghost" data-staff="warn">Выдать предупреждение</button>
+        </div>
+        <div id="staffResult" class="muted mt"></div>
+      </div>
+      <div class="card"><h3>Обращения в поддержку</h3><div id="supportList"></div></div>
+    </div>
+  </main>
+
+  <nav class="mobile-tabs" id="mobileTabs">
+    <button class="tab active" data-tab="feed"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h11a2 2 0 0 1 2 2v13H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2Z"/><path d="M8 8h7M8 12h7M8 16h4M18 8h2a1 1 0 0 1 1 1v9a1.5 1.5 0 0 1-1.5 1.5"/></svg></span><span class="tab-label">Лента</span></button>
+    <button class="tab" data-tab="spaces"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 5.8M17 14a5 5 0 0 1 3.5 4.8"/></svg></span><span class="tab-label">Каналы</span></button>
+    <button class="tab" data-tab="chats"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H7l-4 2v-6.5A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 10h8M8 13.5h5"/></svg></span><span class="tab-label">Чаты</span></button>
+    <button class="tab" data-tab="me"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></span><span class="tab-label">Профиль</span></button>
+    <button class="tab staff-only" data-tab="mod" hidden><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 6v5.5c0 4.5-3.1 7.8-8 9.5-4.9-1.7-8-5-8-9.5V6l8-3Z"/><path d="m8.5 12 2.3 2.3 4.8-5"/></svg></span><span class="tab-label">Модерация</span></button>
+  </nav>
+</section>
+
+<div class="modal" id="spaceModal" hidden>
+  <div class="modal-box">
+    <h3>Новое пространство</h3>
+    <label class="field"><span>Тип</span>
+      <select id="spType">
+        <option value="channel">Канал — посты автора и комментарии</option>
+        <option value="community">Сообщество — пишут все участники</option>
+      </select></label>
+    <label class="field"><span>Название</span><input id="spName" maxlength="60" placeholder="Например, «Омск: объявления»"></label>
+    <label class="field"><span>Описание</span><input id="spDesc" maxlength="200"></label>
+    <label class="field"><span>Доступ</span>
+      <select id="spPrivacy">
+        <option value="public">Открытое</option>
+        <option value="private">Закрытое — нужна галочка верификации</option>
+      </select></label>
+    <label class="field check"><input type="checkbox" id="spComments" checked> Разрешить комментарии</label>
+    <div class="row gap end mt">
+      <button class="btn ghost" id="closeSpaceModal">Отмена</button>
+      <button class="btn primary" id="createSpace">Создать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="profileModal" hidden>
+  <div class="modal-box profile-modal-box">
+    <button class="btn ghost profile-close" id="closeProfileModal" type="button">Закрыть</button>
+    <div id="profileModalContent"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="config.js"></script>
+<script src="native-auth-bridge.bundle.js"></script>
+<script src="app.js?v=20261113-channel-identity-1"></script>
+</body>
+</html>
