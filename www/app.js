@@ -61,6 +61,77 @@ var CONV_LOAD_SEQ = 0;
 var CHAT_RECORDER = null, CHAT_RECORD_STREAM = null, CHAT_RECORD_PARTS = [], CHAT_RECORD_TIMER = null;
 var CHAT_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
+
+/* ================= ЛОКАЛЬНЫЙ КЕШ =================
+   IndexedDB переживает закрытие приложения и перезагрузку устройства.
+   Ключи разделены по user_id; при выходе удаляется только кеш текущего аккаунта.
+*/
+var CACHE_DB_NAME = 'inomesto-local-cache-v1';
+var CACHE_DB_PROMISE = null;
+function cacheDb() {
+  if (!('indexedDB' in window)) return Promise.resolve(null);
+  if (CACHE_DB_PROMISE) return CACHE_DB_PROMISE;
+  CACHE_DB_PROMISE = new Promise(function (resolve) {
+    try {
+      var request = indexedDB.open(CACHE_DB_NAME, 1);
+      request.onupgradeneeded = function () {
+        var db = request.result;
+        if (!db.objectStoreNames.contains('items')) db.createObjectStore('items', { keyPath: 'key' });
+      };
+      request.onsuccess = function () { resolve(request.result); };
+      request.onerror = function () { resolve(null); };
+      request.onblocked = function () { resolve(null); };
+    } catch (_) { resolve(null); }
+  });
+  return CACHE_DB_PROMISE;
+}
+function cacheKey(kind, id) { return String(ME && ME.id || '') + '|' + kind + '|' + String(id || ''); }
+async function cacheGet(kind, id) {
+  var db = await cacheDb();
+  if (!db || !ME) return null;
+  return new Promise(function (resolve) {
+    try {
+      var tx = db.transaction('items', 'readonly');
+      var req = tx.objectStore('items').get(cacheKey(kind, id));
+      req.onsuccess = function () { resolve(req.result && req.result.value != null ? req.result.value : null); };
+      req.onerror = function () { resolve(null); };
+    } catch (_) { resolve(null); }
+  });
+}
+async function cachePut(kind, id, value) {
+  var db = await cacheDb();
+  if (!db || !ME) return;
+  return new Promise(function (resolve) {
+    try {
+      var tx = db.transaction('items', 'readwrite');
+      tx.objectStore('items').put({ key: cacheKey(kind, id), user_id: ME.id, value: value, saved_at: Date.now() });
+      tx.oncomplete = function () { resolve(); };
+      tx.onerror = function () { resolve(); };
+      tx.onabort = function () { resolve(); };
+    } catch (_) { resolve(); }
+  });
+}
+async function cacheClearUser(userId) {
+  var db = await cacheDb();
+  if (!db || !userId) return;
+  return new Promise(function (resolve) {
+    try {
+      var tx = db.transaction('items', 'readwrite');
+      var store = tx.objectStore('items');
+      var req = store.openCursor();
+      req.onsuccess = function () {
+        var cursor = req.result;
+        if (!cursor) return;
+        if (cursor.value && cursor.value.user_id === userId) cursor.delete();
+        cursor.continue();
+      };
+      tx.oncomplete = function () { resolve(); };
+      tx.onerror = function () { resolve(); };
+      tx.onabort = function () { resolve(); };
+    } catch (_) { resolve(); }
+  });
+}
+
 function makeUuid() {
   if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -437,7 +508,7 @@ if ($('#signInEmail')) $('#signInEmail').onclick = async function () {
   } catch (e) { fail(e.message || e); }
 };
 
-if ($('#signOut')) $('#signOut').onclick = function () { sb.auth.signOut().then(function () { location.reload(); }); };
+if ($('#signOut')) $('#signOut').onclick = async function () { var userId = ME && ME.id; $('#signOut').disabled = true; try { if (userId) await cacheClearUser(userId); var out = await sb.auth.signOut(); if (out.error) throw out.error; location.reload(); } catch (e) { $('#signOut').disabled = false; fail('Не удалось выйти из аккаунта: ' + (e.message || e)); } };
 
 if ($('#saveAccountPassword')) $('#saveAccountPassword').onclick = async function () {
   var password = $('#accountPassword').value || '';
@@ -715,66 +786,72 @@ function postHtml(p) {
 async function loadFeed() {
   var box = $('#feed');
   if (!box || !ME) return;
+  var userId = ME.id;
   box.innerHTML = '<div class="card empty">Загружаем публикации ваших каналов…</div>';
   try {
-    var membership = await sb.from('space_members').select('space_id').eq('user_id', ME.id);
-    if (membership.error) { fail('Не удалось загрузить подписки: ' + membership.error.message); return; }
-
-    var ids = Array.from(new Set((membership.data || []).map(function (m) { return m.space_id; }).filter(Boolean)));
+    var cached = await cacheGet('feed', 'main');
+    if (cached && ME && ME.id === userId) {
+      FEED = cached;
+      await signPaths(FEED);
+      var ca = FEED.reduce(function (a,p) { a.push(p.author || {}); if (p._space) a.push({display_name:p._space.name,avatar_url:p._space.avatar_url}); (p.comments || []).forEach(function(c){a.push(c.author || {});}); return a; }, []);
+      await signAvatarPaths(ca);
+      if (ME && ME.id === userId) box.innerHTML = FEED.length ? FEED.map(postHtml).join('') : '<div class="card empty">Новых публикаций пока нет.</div>';
+    }
+    var membership = await sb.from('space_members').select('space_id').eq('user_id', userId);
+    if (membership.error) throw new Error('Не удалось загрузить подписки: ' + membership.error.message);
+    var ids = Array.from(new Set((membership.data || []).map(function(m){return m.space_id;}).filter(Boolean)));
     if (!ids.length) {
-      FEED = [];
+      FEED = []; await cachePut('feed','main',[]);
       box.innerHTML = '<div class="card empty"><h3>В вашей ленте пока тихо</h3><p>Подпишитесь на интересные каналы — их новые публикации будут появляться здесь.</p><button class="btn primary" id="feedFindChannelsEmpty">Найти каналы</button></div>';
-      var findEmpty = $('#feedFindChannelsEmpty');
-      if (findEmpty) findEmpty.onclick = function () { showTab('spaces'); };
-      return;
+      var fe = $('#feedFindChannelsEmpty'); if (fe) fe.onclick = function(){showTab('spaces');}; return;
     }
-
-    var spacesResult = await sb.from('spaces').select('id,name,avatar_url,is_archived,type,description,privacy,comments_enabled,owner_id,created_at').in('id', ids).eq('type', 'channel');
-    if (spacesResult.error) { fail('Не удалось проверить каналы: ' + spacesResult.error.message); return; }
-    var channels = (spacesResult.data || []).filter(function (s) { return !s.is_archived; });
-    if (!channels.length) {
-      FEED = [];
-      box.innerHTML = '<div class="card empty"><h3>Вы пока не подписаны на каналы</h3><p>Найдите каналы и подпишитесь, чтобы видеть их публикации в ленте.</p><button class="btn primary" id="feedFindChannelsEmpty">Найти каналы</button></div>';
-      var findNoChannels = $('#feedFindChannelsEmpty');
-      if (findNoChannels) findNoChannels.onclick = function () { showTab('spaces'); };
-      return;
-    }
-
-    var channelIds = channels.map(function (s) { return s.id; });
-    var postsResult = await sb.from('posts').select(POST_SELECT).in('space_id', channelIds)
-      .order('created_at', { ascending: false }).limit(60);
-    if (postsResult.error) { fail('Лента не загрузилась: ' + postsResult.error.message); return; }
-
-    var spacesById = {};
-    channels.forEach(function (s) { spacesById[s.id] = s; });
+    var spacesResult = await sb.from('spaces').select('id,name,avatar_url,is_archived,type,description,privacy,comments_enabled,owner_id,created_at').in('id',ids).eq('type','channel');
+    if (spacesResult.error) throw spacesResult.error;
+    var channels = (spacesResult.data || []).filter(function(x){return !x.is_archived;});
+    if (!channels.length) { FEED=[]; await cachePut('feed','main',[]); box.innerHTML='<div class="card empty"><h3>Вы пока не подписаны на каналы</h3><p>Найдите каналы и подпишитесь, чтобы видеть их публикации в ленте.</p></div>'; return; }
+    var channelIds = channels.map(function(x){return x.id;});
+    var postsResult = await sb.from('posts').select(POST_SELECT).in('space_id',channelIds).order('created_at',{ascending:false}).limit(60);
+    if (postsResult.error) throw postsResult.error;
+    var byId = {}; channels.forEach(function(x){byId[x.id]=x;});
     FEED = postsResult.data || [];
-    FEED.forEach(function (p) { p._space = spacesById[p.space_id] || null; p._spaceName = (p._space && p._space.name) || 'Канал'; });
+    FEED.forEach(function(p){p._space=byId[p.space_id]||null;p._spaceName=(p._space&&p._space.name)||'Канал';});
+    await cachePut('feed','main',FEED.slice(0,5));
     await signPaths(FEED);
-    var avatarItems = FEED.reduce(function (a, p) { a.push(p.author || {}); if (p._space) a.push({display_name:p._space.name,avatar_url:p._space.avatar_url}); (p.comments || []).forEach(function (c) { a.push(c.author || {}); }); return a; }, []);
-    await signAvatarPaths(avatarItems);
-
-    box.innerHTML = FEED.length ? FEED.map(postHtml).join('')
-      : '<div class="card empty"><h3>Новых публикаций пока нет</h3><p>Вы подписаны на ' + channels.length + ' канал(а). Когда там появятся посты, они отобразятся здесь.</p><button class="btn ghost" id="feedOpenChannels">Мои каналы</button></div>';
-    var openChannels = $('#feedOpenChannels');
-    if (openChannels) openChannels.onclick = function () { showTab('spaces'); };
-  } catch (e) { fail(e.message || e); }
+    var avatars = FEED.reduce(function(a,p){a.push(p.author||{});if(p._space)a.push({display_name:p._space.name,avatar_url:p._space.avatar_url});(p.comments||[]).forEach(function(c){a.push(c.author||{});});return a;},[]);
+    await signAvatarPaths(avatars);
+    if (!ME || ME.id !== userId) return;
+    box.innerHTML = FEED.length ? FEED.map(postHtml).join('') : '<div class="card empty"><h3>Новых публикаций пока нет</h3><p>Вы подписаны на '+channels.length+' канал(а). Когда там появятся посты, они отобразятся здесь.</p><button class="btn ghost" id="feedOpenChannels">Мои каналы</button></div>';
+    var oc=$('#feedOpenChannels'); if(oc) oc.onclick=function(){showTab('spaces');};
+  } catch(e) { if (ME && ME.id===userId) fail(e.message || e); }
 }
-
 async function loadSpacePosts() {
   var box = $('#spacePosts');
-  if (!box || !CURRENT_SPACE) return;
-  var r = await sb.from('posts').select(POST_SELECT).eq('space_id', CURRENT_SPACE.id)
-    .order('created_at', { ascending: false }).limit(60);
-  if (r.error) { box.innerHTML = '<div class="card sub">' + esc(r.error.message) + '</div>'; return; }
-  var rows = r.data || [];
-  await signPaths(rows);
-  rows.forEach(function (p) { p._space = CURRENT_SPACE; p._spaceName = CURRENT_SPACE.name; });
-  var avatarItems = rows.reduce(function (a, p) { a.push(p.author || {}, {display_name:CURRENT_SPACE.name,avatar_url:CURRENT_SPACE.avatar_url}); (p.comments || []).forEach(function (c) { a.push(c.author || {}); }); return a; }, []);
-  await signAvatarPaths(avatarItems);
-  box.innerHTML = rows.length ? rows.map(postHtml).join('') : '<div class="card sub">Публикаций пока нет.</div>';
-  await markSpaceRead(CURRENT_SPACE.id);
+  if (!box || !CURRENT_SPACE || !ME) return;
+  var space = CURRENT_SPACE, userId = ME.id;
+  var key = space.id;
+  try {
+    var cached = await cacheGet('space-posts', key);
+    if (cached && CURRENT_SPACE && CURRENT_SPACE.id === key && ME && ME.id === userId) {
+      var cachedRows = cached;
+      await signPaths(cachedRows);
+      cachedRows.forEach(function(p){p._space=space;p._spaceName=space.name;});
+      var ca = cachedRows.reduce(function(a,p){a.push(p.author||{},{display_name:space.name,avatar_url:space.avatar_url});(p.comments||[]).forEach(function(c){a.push(c.author||{});});return a;},[]);
+      await signAvatarPaths(ca);
+      if (CURRENT_SPACE && CURRENT_SPACE.id === key) box.innerHTML = cachedRows.length ? cachedRows.map(postHtml).join('') : '<div class="card sub">Публикаций пока нет.</div>';
+    }
+    var r = await sb.from('posts').select(POST_SELECT).eq('space_id',key).order('created_at',{ascending:false}).limit(60);
+    if (r.error) throw r.error;
+    var rows = r.data || [];
+    await cachePut('space-posts',key,rows.slice(0,5));
+    await signPaths(rows);
+    rows.forEach(function(p){p._space=space;p._spaceName=space.name;});
+    var avatars = rows.reduce(function(a,p){a.push(p.author||{},{display_name:space.name,avatar_url:space.avatar_url});(p.comments||[]).forEach(function(c){a.push(c.author||{});});return a;},[]);
+    await signAvatarPaths(avatars);
+    if (!CURRENT_SPACE || CURRENT_SPACE.id !== key || !ME || ME.id !== userId) return;
+    box.innerHTML = rows.length ? rows.map(postHtml).join('') : '<div class="card sub">Публикаций пока нет.</div>';
+    await markSpaceRead(key);
+  } catch(e) { if (CURRENT_SPACE && CURRENT_SPACE.id === key) box.innerHTML = '<div class="card sub">' + esc(e.message || e) + '</div>'; }
 }
-
 async function publishPost(spaceId) {
   try {
     if (!ME) return toast('Сначала войдите в аккаунт');
@@ -1097,76 +1174,60 @@ async function loadConversations() {
   var requestId = ++CONV_LOAD_SEQ;
   var userId = ME.id;
   try {
+    var cached = await cacheGet('conversations', 'all');
+    if (cached && requestId === CONV_LOAD_SEQ && ME && ME.id === userId) {
+      CONVS = cached;
+      renderConvList();
+    }
     var mem = await sb.from('conversation_members').select('conversation_id').eq('user_id', userId);
     if (mem.error) throw mem.error;
     if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
-
-    // Дедупликация ID на случай повторных строк членства в ответе API.
     var ids = Array.from(new Set((mem.data || []).map(function (m) { return m.conversation_id; }).filter(Boolean)));
-    var all = { data: [] };
-    var conversations = [];
-
+    var all = { data: [] }, conversations = [];
     if (ids.length) {
       var cs = await sb.from('conversations').select('id,is_support,owner_user').in('id', ids);
       if (cs.error) throw cs.error;
-      all = await sb.from('conversation_members')
-        .select('conversation_id,user_id,profiles(display_name,username,avatar_url)').in('conversation_id', ids);
+      all = await sb.from('conversation_members').select('conversation_id,user_id,profiles(display_name,username,avatar_url)').in('conversation_id', ids);
       if (all.error) throw all.error;
       if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
-
-      // Map гарантирует, что каждый диалог попадёт в список только один раз.
       var unique = new Map();
       (cs.data || []).forEach(function (c) {
         if (!c || !c.id || unique.has(c.id)) return;
         var others = (all.data || []).filter(function (m) { return m.conversation_id === c.id && m.user_id !== userId; });
         var o = others[0] || {};
-        unique.set(c.id, {
-          id: c.id, is_support: c.is_support, owner_user: c.owner_user,
-          title: c.is_support ? 'Чат поддержки' : ((o.profiles || {}).display_name || 'Диалог'),
-          sub: c.is_support ? 'Обращение в поддержку' : '@' + ((o.profiles || {}).username || '—'),
-          target: o.user_id || null, _profile: o.profiles || {}
-        });
+        unique.set(c.id, { id:c.id, is_support:c.is_support, owner_user:c.owner_user,
+          title:c.is_support ? 'Чат поддержки' : ((o.profiles || {}).display_name || 'Диалог'),
+          sub:c.is_support ? 'Обращение в поддержку' : '@' + ((o.profiles || {}).username || '—'),
+          target:o.user_id || null, _profile:o.profiles || {} });
       });
       conversations = Array.from(unique.values());
     }
-
     if (isStaff()) {
-      var sup = await sb.from('conversations')
-        .select('id,is_support,owner_user,profiles!conversations_owner_user_fkey(display_name,username)')
-        .eq('is_support', true);
+      var sup = await sb.from('conversations').select('id,is_support,owner_user,profiles!conversations_owner_user_fkey(display_name,username)').eq('is_support', true);
       if (sup.error) throw sup.error;
       if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
-      sup.data && sup.data.forEach(function (c) {
+      (sup.data || []).forEach(function (c) {
         if (!c || !c.id || conversations.some(function (x) { return x.id === c.id; })) return;
         var p = c.profiles || {};
-        conversations.push({
-          id: c.id, is_support: true, owner_user: c.owner_user, staffView: true,
-          title: 'Поддержка: ' + (p.display_name || 'пользователь'),
-          sub: '@' + (p.username || '—'), target: c.owner_user
-        });
+        conversations.push({ id:c.id, is_support:true, owner_user:c.owner_user, staffView:true,
+          title:'Поддержка: ' + (p.display_name || 'пользователь'), sub:'@' + (p.username || '—'), target:c.owner_user });
       });
     }
-
     await signAvatarPaths((all.data || []).map(function (m) { return m.profiles || {}; }));
     if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
-
     CONVS = conversations;
+    await cachePut('conversations', 'all', CONVS);
     CONV_UNREAD = {};
     var convIds = CONVS.filter(function (c) { return !c.staffView; }).map(function (c) { return c.id; });
     if (convIds.length) {
-      var cc = await sb.from('notification_cursors').select('scope_id,last_seen_at').eq('user_id', userId)
-        .eq('scope_type', 'conversation').in('scope_id', convIds);
+      var cc = await sb.from('notification_cursors').select('scope_id,last_seen_at').eq('user_id', userId).eq('scope_type', 'conversation').in('scope_id', convIds);
       if (cc.error) throw cc.error;
       if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
       var cm = {};
       (cc.data || []).forEach(function (v) { cm[v.scope_id] = v.last_seen_at; });
       var fresh = convIds.filter(function (id) { return !cm[id]; });
-      for (var ci = 0; ci < fresh.length; ci++) {
-        await markRead('conversation', fresh[ci]);
-        cm[fresh[ci]] = new Date().toISOString();
-      }
-      var msgs = await sb.from('messages').select('conversation_id,sender_id,created_at')
-        .in('conversation_id', convIds).neq('sender_id', userId).order('created_at', { ascending: false }).limit(500);
+      for (var ci = 0; ci < fresh.length; ci++) { await markRead('conversation', fresh[ci]); cm[fresh[ci]] = new Date().toISOString(); }
+      var msgs = await sb.from('messages').select('conversation_id,sender_id,created_at').in('conversation_id', convIds).neq('sender_id', userId).order('created_at', { ascending: false }).limit(500);
       if (msgs.error) throw msgs.error;
       if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
       (msgs.data || []).forEach(function (m) {
@@ -1174,9 +1235,7 @@ async function loadConversations() {
       });
     }
     if (requestId === CONV_LOAD_SEQ && ME && ME.id === userId) renderConvList();
-  } catch (e) {
-    if (requestId === CONV_LOAD_SEQ) fail(e.message || e);
-  }
+  } catch (e) { if (requestId === CONV_LOAD_SEQ) fail(e.message || e); }
 }
 function renderConvList() {
   $('#convList').innerHTML = CONVS.length ? CONVS.map(function (c) {
@@ -1215,60 +1274,57 @@ async function openConv(id) {
   poll = setInterval(function () { if (CURRENT_CONV && CURRENT_CONV.id === id) loadMessages(); }, 7000);
 }
 
-async function loadMessages() {
-  if (!CURRENT_CONV) return;
-  var conversationId = CURRENT_CONV.id;
-  var r = await sb.from('messages')
-    .select('id,body,attachments,from_support,sender_id,created_at,profiles(display_name)')
-    .eq('conversation_id', conversationId).order('created_at', { ascending: false }).limit(300);
-  if (r.error) { if (CURRENT_CONV && CURRENT_CONV.id === conversationId) $('#messages').innerHTML = '<div class="sub">' + esc(r.error.message) + '</div>'; return; }
-  var messageRows = (r.data || []).reverse();
+async function renderMessageRows(messageRows, conversationId, cachedOnly) {
   if (!CURRENT_CONV || CURRENT_CONV.id !== conversationId) return;
   await signMessagePaths(messageRows);
   if (!CURRENT_CONV || CURRENT_CONV.id !== conversationId) return;
-  var messageIds = messageRows.map(function (m) { return m.id; });
   var reactionMap = {};
+  var messageIds = cachedOnly ? [] : messageRows.map(function(m){return m.id;});
   if (messageIds.length) {
-    var rx = await sb.from('message_reactions').select('message_id,user_id,emoji').in('message_id', messageIds);
-    if (rx.error) console.warn('Реакции не загрузились:', rx.error.message);
-    (rx.data || []).forEach(function (x) {
-      if (!reactionMap[x.message_id]) reactionMap[x.message_id] = {};
-      if (!reactionMap[x.message_id][x.emoji]) reactionMap[x.message_id][x.emoji] = { count: 0, mine: false };
+    var rx = await sb.from('message_reactions').select('message_id,user_id,emoji').in('message_id',messageIds);
+    if (!rx.error) (rx.data || []).forEach(function(x){
+      if(!reactionMap[x.message_id]) reactionMap[x.message_id]={};
+      if(!reactionMap[x.message_id][x.emoji]) reactionMap[x.message_id][x.emoji]={count:0,mine:false};
       reactionMap[x.message_id][x.emoji].count++;
-      if (x.user_id === ME.id) reactionMap[x.message_id][x.emoji].mine = true;
+      if(x.user_id===ME.id) reactionMap[x.message_id][x.emoji].mine=true;
     });
   }
-  var box = $('#messages');
-  var quickReactions = CHAT_REACTIONS.slice(0, 5);
-  box.innerHTML = messageRows.map(function (m) {
-    var mine = m.sender_id === ME.id;
-    var label = m.from_support ? 'Чат поддержки' : ((m.profiles || {}).display_name || 'Участник');
-    var body = esc(m.body || '').replace(/\n/g, '<br>');
-    var files = (m.attachments || []).map(chatAttachmentHtml).join('');
-    var groups = reactionMap[m.id] || {};
-    var reactionHtml = CHAT_REACTIONS.filter(function (emoji) { return !!groups[emoji]; }).map(function (emoji) {
-      var item = groups[emoji];
-      return '<button type="button" class="chat-reaction' + (item.mine ? ' mine' : '') + '" data-react-message="' + m.id + '" data-react-emoji="' + emoji + '" title="Убрать или поставить реакцию">' + emoji + ' <span>' + item.count + '</span></button>';
-    }).join('');
-    var quickHtml = quickReactions.map(function (emoji) {
-      return '<button type="button" class="chat-picker-emoji" data-react-message="' + m.id + '" data-react-emoji="' + emoji + '" aria-label="Поставить реакцию ' + emoji + '">' + emoji + '</button>';
-    }).join('');
-    var allHtml = CHAT_REACTIONS.map(function (emoji) {
-      return '<button type="button" class="chat-picker-emoji" data-react-message="' + m.id + '" data-react-emoji="' + emoji + '" aria-label="Поставить реакцию ' + emoji + '">' + emoji + '</button>';
-    }).join('');
-    return '<div class="bubble' + (mine ? ' mine' : '') + '" data-message-bubble>' +
-      '<div class="chat-reaction-tools">' +
-        '<div class="chat-reaction-quick">' + quickHtml +
-          '<button type="button" class="chat-picker-more" data-react-more aria-label="Показать все эмодзи" title="Все эмодзи">＋</button>' +
-        '</div>' +
-        '<div class="chat-reaction-expanded" hidden>' + allHtml + '</div>' +
-      '</div>' +
-      (body ? '<div class="message-body">' + body + '</div>' : '') + files +
-      '<small>' + (mine ? 'Вы' : esc(label)) + ' · ' + dateF(m.created_at) + '</small>' +
-      (reactionHtml ? '<div class="chat-reactions">' + reactionHtml + '</div>' : '') + '</div>';
+  var box=$('#messages'), quick=CHAT_REACTIONS.slice(0,5);
+  box.innerHTML = messageRows.map(function(m){
+    var mine=m.sender_id===ME.id, label=m.from_support?'Чат поддержки':((m.profiles||{}).display_name||'Участник');
+    var body=esc(m.body||'').replace(/\n/g,'<br>'), files=(m.attachments||[]).map(chatAttachmentHtml).join('');
+    var groups=reactionMap[m.id]||{};
+    var reactionHtml=CHAT_REACTIONS.filter(function(e){return !!groups[e];}).map(function(e){var x=groups[e];return '<button class="chat-reaction'+(x.mine?' mine':'')+'" data-react-message="'+m.id+'" data-react-emoji="'+e+'">'+e+' <span>'+x.count+'</span></button>';}).join('');
+    var quickHtml=quick.map(function(e){return '<button class="chat-picker-emoji" data-react-message="'+m.id+'" data-react-emoji="'+e+'">'+e+'</button>';}).join('');
+    var allHtml=CHAT_REACTIONS.map(function(e){return '<button class="chat-picker-emoji" data-react-message="'+m.id+'" data-react-emoji="'+e+'">'+e+'</button>';}).join('');
+    return '<div class="bubble'+(mine?' mine':'')+'" data-message-bubble><div class="chat-reaction-tools"><div class="chat-reaction-quick">'+quickHtml+'<button class="chat-picker-more" data-react-more>＋</button></div><div class="chat-reaction-expanded" hidden>'+allHtml+'</div></div>'+
+      (body?'<div class="message-body">'+body+'</div>':'')+files+'<small>'+(mine?'Вы':esc(label))+' · '+dateF(m.created_at)+'</small>'+
+      (reactionHtml?'<div class="chat-reactions">'+reactionHtml+'</div>':'')+'</div>';
   }).join('') || '<div class="empty">Сообщений пока нет</div>';
-  box.scrollTop = box.scrollHeight;
-  if (CURRENT_CONV && CURRENT_CONV.id === conversationId) { await markRead('conversation', conversationId); CONV_UNREAD[conversationId] = 0; renderConvList(); }
+  box.scrollTop=box.scrollHeight;
+}
+async function loadMessages() {
+  if (!CURRENT_CONV || !ME) return;
+  var conversationId=CURRENT_CONV.id, userId=ME.id;
+  try {
+    var cached=await cacheGet('messages',conversationId);
+    if(cached && CURRENT_CONV && CURRENT_CONV.id===conversationId && ME && ME.id===userId) {
+      await renderMessageRows(cached,conversationId,true);
+    }
+    var r=await sb.from('messages').select('id,body,attachments,from_support,sender_id,created_at,profiles(display_name)')
+      .eq('conversation_id',conversationId).order('created_at',{ascending:false}).limit(300);
+    if(r.error) throw r.error;
+    var messageRows=(r.data||[]).reverse();
+    if(!CURRENT_CONV || CURRENT_CONV.id!==conversationId || !ME || ME.id!==userId) return;
+    await cachePut('messages',conversationId,messageRows.slice(-10));
+    await renderMessageRows(messageRows,conversationId,false);
+    if(CURRENT_CONV && CURRENT_CONV.id===conversationId) { await markRead('conversation',conversationId); CONV_UNREAD[conversationId]=0; renderConvList(); }
+  } catch(e) {
+    if(CURRENT_CONV && CURRENT_CONV.id===conversationId && ME && ME.id===userId) {
+      var existing=$('#messages');
+      if(!existing.innerHTML || existing.innerHTML.indexOf('bubble')<0) existing.innerHTML='<div class="sub">Не удалось загрузить сообщения. '+esc(e.message||e)+'</div>';
+    }
+  }
 }
 function stopVoiceRecording() {
   if (CHAT_RECORD_TIMER) clearTimeout(CHAT_RECORD_TIMER);
