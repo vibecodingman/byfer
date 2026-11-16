@@ -64,7 +64,6 @@
       <button class="tab" data-tab="me"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></span><span class="tab-label">Профиль</span></button>
       <button class="tab staff-only" data-tab="mod" hidden><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 6v5.5c0 4.5-3.1 7.8-8 9.5-4.9-1.7-8-5-8-9.5V6l8-3Z"/><path d="m8.5 12 2.3 2.3 4.8-5"/></svg></span><span class="tab-label">Модерация</span></button>
     </nav>
-    <button class="btn ghost" id="signOut">Выйти</button>
   </header>
 
   <div class="banner" id="muteBanner" hidden></div>
@@ -170,8 +169,12 @@
       </div>
       <div class="card">
         <h3>Поддержка</h3>
-        <p class="muted">Обращение увидят владелец и совладельцы. Ответ придёт от имени чата поддержки.</p>
+        <p class="muted">Наши модераторы увидят ваше сообщение и постараются как можно скорее решить вашу проблему.</p>
         <button class="btn ghost" id="openSupport">Открыть чат поддержки</button>
+      </div>
+      <div class="card">
+        <h3>Аккаунт</h3>
+        <button class="btn ghost" id="signOut" type="button">Выйти из аккаунта</button>
       </div>
     </div>
 
@@ -235,6 +238,6 @@
 
 <div id="toast" class="toast"></div>
 <script src="config.js"></script>
-<script src="app.js?v=20261115-username-password-1"></script>
+<script src="app.js?v=20261116-settings-chat-cache-1"></script>
 </body>
 </html>
