@@ -57,6 +57,7 @@ var sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
 
 var ME = null, STAGED = [], FEED = [], SIGNED = {}, SIGNED_EXPIRES = {}, AVATAR_URLS = {}, AVATAR_URL_EXPIRES = {}, SPACES = [], SPACE_SEARCH_RESULTS = [], SPACE_MY_ROLES = {}, SPACE_PENDING = {}, SPACE_SEARCH_TIMER = null, CONVS = [];
 var CHAT_STAGED = [], CHAT_SENDING = false;
+var CONV_LOAD_SEQ = 0;
 var CHAT_RECORDER = null, CHAT_RECORD_STREAM = null, CHAT_RECORD_PARTS = [], CHAT_RECORD_TIMER = null;
 var CHAT_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
@@ -1092,62 +1093,91 @@ $('#createSpace').onclick = async function () {
 
 /* ================= ЧАТЫ ================= */
 async function loadConversations() {
+  if (!ME) return;
+  var requestId = ++CONV_LOAD_SEQ;
+  var userId = ME.id;
   try {
-    var mem = await sb.from('conversation_members').select('conversation_id').eq('user_id', ME.id);
-    var ids = (mem.data || []).map(function (m) { return m.conversation_id; });
+    var mem = await sb.from('conversation_members').select('conversation_id').eq('user_id', userId);
+    if (mem.error) throw mem.error;
+    if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
+
+    // Дедупликация ID на случай повторных строк членства в ответе API.
+    var ids = Array.from(new Set((mem.data || []).map(function (m) { return m.conversation_id; }).filter(Boolean)));
     var all = { data: [] };
-    CONVS = [];
+    var conversations = [];
 
     if (ids.length) {
       var cs = await sb.from('conversations').select('id,is_support,owner_user').in('id', ids);
+      if (cs.error) throw cs.error;
       all = await sb.from('conversation_members')
         .select('conversation_id,user_id,profiles(display_name,username,avatar_url)').in('conversation_id', ids);
+      if (all.error) throw all.error;
+      if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
+
+      // Map гарантирует, что каждый диалог попадёт в список только один раз.
+      var unique = new Map();
       (cs.data || []).forEach(function (c) {
-        var others = (all.data || []).filter(function (m) { return m.conversation_id === c.id && m.user_id !== ME.id; });
+        if (!c || !c.id || unique.has(c.id)) return;
+        var others = (all.data || []).filter(function (m) { return m.conversation_id === c.id && m.user_id !== userId; });
         var o = others[0] || {};
-        CONVS.push({
+        unique.set(c.id, {
           id: c.id, is_support: c.is_support, owner_user: c.owner_user,
           title: c.is_support ? 'Чат поддержки' : ((o.profiles || {}).display_name || 'Диалог'),
-          sub: c.is_support ? 'Обращение к владельцу и совладельцам' : '@' + ((o.profiles || {}).username || '—'),
+          sub: c.is_support ? 'Обращение в поддержку' : '@' + ((o.profiles || {}).username || '—'),
           target: o.user_id || null, _profile: o.profiles || {}
         });
       });
+      conversations = Array.from(unique.values());
     }
 
     if (isStaff()) {
       var sup = await sb.from('conversations')
         .select('id,is_support,owner_user,profiles!conversations_owner_user_fkey(display_name,username)')
         .eq('is_support', true);
-      (sup.data || []).forEach(function (c) {
-        if (CONVS.some(function (x) { return x.id === c.id; })) return;
+      if (sup.error) throw sup.error;
+      if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
+      sup.data && sup.data.forEach(function (c) {
+        if (!c || !c.id || conversations.some(function (x) { return x.id === c.id; })) return;
         var p = c.profiles || {};
-        CONVS.push({
+        conversations.push({
           id: c.id, is_support: true, owner_user: c.owner_user, staffView: true,
           title: 'Поддержка: ' + (p.display_name || 'пользователь'),
           sub: '@' + (p.username || '—'), target: c.owner_user
         });
       });
     }
+
     await signAvatarPaths((all.data || []).map(function (m) { return m.profiles || {}; }));
+    if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
+
+    CONVS = conversations;
     CONV_UNREAD = {};
     var convIds = CONVS.filter(function (c) { return !c.staffView; }).map(function (c) { return c.id; });
     if (convIds.length) {
-      var cc = await sb.from('notification_cursors').select('scope_id,last_seen_at').eq('user_id', ME.id)
+      var cc = await sb.from('notification_cursors').select('scope_id,last_seen_at').eq('user_id', userId)
         .eq('scope_type', 'conversation').in('scope_id', convIds);
+      if (cc.error) throw cc.error;
+      if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
       var cm = {};
       (cc.data || []).forEach(function (v) { cm[v.scope_id] = v.last_seen_at; });
       var fresh = convIds.filter(function (id) { return !cm[id]; });
-      for (var ci = 0; ci < fresh.length; ci++) { await markRead('conversation', fresh[ci]); cm[fresh[ci]] = new Date().toISOString(); }
+      for (var ci = 0; ci < fresh.length; ci++) {
+        await markRead('conversation', fresh[ci]);
+        cm[fresh[ci]] = new Date().toISOString();
+      }
       var msgs = await sb.from('messages').select('conversation_id,sender_id,created_at')
-        .in('conversation_id', convIds).neq('sender_id', ME.id).order('created_at', { ascending: false }).limit(500);
+        .in('conversation_id', convIds).neq('sender_id', userId).order('created_at', { ascending: false }).limit(500);
+      if (msgs.error) throw msgs.error;
+      if (requestId !== CONV_LOAD_SEQ || !ME || ME.id !== userId) return;
       (msgs.data || []).forEach(function (m) {
         if (new Date(m.created_at) > new Date(cm[m.conversation_id])) CONV_UNREAD[m.conversation_id] = (CONV_UNREAD[m.conversation_id] || 0) + 1;
       });
     }
-    renderConvList();
-  } catch (e) { fail(e.message || e); }
+    if (requestId === CONV_LOAD_SEQ && ME && ME.id === userId) renderConvList();
+  } catch (e) {
+    if (requestId === CONV_LOAD_SEQ) fail(e.message || e);
+  }
 }
-
 function renderConvList() {
   $('#convList').innerHTML = CONVS.length ? CONVS.map(function (c) {
     return '<div class="conv' + (CURRENT_CONV && CURRENT_CONV.id === c.id ? ' on' : '') + '" data-conv="' + c.id + '">' +
